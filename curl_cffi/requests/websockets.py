@@ -695,7 +695,7 @@ class AsyncWebSocket(BaseWebSocket):
         "_block_on_recv_queue_full",
     )
 
-    _MAX_CURL_FRAME_SIZE: Final[int] = 65536
+    _MAX_CURL_FRAME_SIZE: Final[int] = 65535
 
     def __init__(
         self,
@@ -704,13 +704,13 @@ class AsyncWebSocket(BaseWebSocket):
         *,
         autoclose: bool = True,
         debug: bool = False,
-        recv_queue_size: int = 32,
-        send_queue_size: int = 16,
-        max_send_batch_size: int = 32,
+        recv_queue_size: int = 128,
+        send_queue_size: int = 128,
+        max_send_batch_size: int = 64,
         coalesce_frames: bool = False,
         ws_retry: WebSocketRetryStrategy | None = None,
-        recv_time_slice: float = 0.005,
-        send_time_slice: float = 0.001,
+        recv_time_slice: float = 0.01,
+        send_time_slice: float = 0.01,
         max_message_size: int = 4 * 1024 * 1024,
         drain_on_error: bool = False,
         block_on_recv_queue_full: bool = True,
@@ -1361,18 +1361,14 @@ class AsyncWebSocket(BaseWebSocket):
         retry_codes: set[CurlECode] = self.ws_retry.codes
         max_retries: int = self.ws_retry.count
         retry_base: float = float(self.ws_retry.delay)
-        e_again: CurlECode = CurlECode.AGAIN
-        e_recv_err: CurlECode = CurlECode.RECV_ERROR
-        e_nothing: CurlECode = CurlECode.GOT_NOTHING
-        close_flag: CurlWsFlag = CurlWsFlag.CLOSE
-        cont_flag: CurlWsFlag = CurlWsFlag.CONT
+        e_again: int = int(CurlECode.AGAIN)
+        e_recv_err: int = int(CurlECode.RECV_ERROR)
+        e_nothing: int = int(CurlECode.GOT_NOTHING)
+        close_flag: int = int(CurlWsFlag.CLOSE)
+        cont_flag: int = int(CurlWsFlag.CONT)
         data_mask: int = CurlWsFlag.BINARY | CurlWsFlag.TEXT | cont_flag
         max_msg_size: int = self._max_message_size
         block_on_recv: bool = self._block_on_recv_queue_full
-        errno_11_msgs: tuple[str, ...] = (
-            "errno 11",
-            "resource temporarily unavailable",
-        )
         queue_full_err: str = (
             "Receive queue full; failing connection to preserve message integrity"
         )
@@ -1400,7 +1396,10 @@ class AsyncWebSocket(BaseWebSocket):
                     # EAGAIN ("errno 11") bubbling up as RECV_ERROR from BoringSSL
                     elif e.code == e_recv_err:
                         err_msg: str = str(e).lower()
-                        if any(msg in err_msg for msg in errno_11_msgs):
+                        if (
+                            "errno 11" in err_msg
+                            or "resource temporarily unavailable" in err_msg
+                        ):
                             should_retry = True
 
                     # Handle Server Disconnect (Empty Reply)
@@ -1567,6 +1566,7 @@ class AsyncWebSocket(BaseWebSocket):
             transmitting a CLOSE frame.
         """
         control_frame_flags: int = CurlWsFlag.CLOSE | CurlWsFlag.PING | CurlWsFlag.PONG
+        close_flag: int = int(CurlWsFlag.CLOSE)
         send_payload: Callable[..., Awaitable[bool]] = self._send_payload
         queue_get: Callable[[], Awaitable[SEND_QUEUE_ITEM]] = self._send_queue.get
         queue_get_nowait: Callable[[], SEND_QUEUE_ITEM] = self._send_queue.get_nowait
@@ -1587,7 +1587,7 @@ class AsyncWebSocket(BaseWebSocket):
                         if not await send_payload(payload, flags):
                             return
 
-                        if flags & CurlWsFlag.CLOSE:
+                        if flags & close_flag:
                             break
 
                         # Perform yield checks
@@ -1605,12 +1605,12 @@ class AsyncWebSocket(BaseWebSocket):
 
                     # Build the rest of the batch without waiting.
                     batch: list[SEND_QUEUE_ITEM] = [(payload, flags)]
-                    if not (flags & CurlWsFlag.CLOSE):
+                    if not (flags & close_flag):
                         while len(batch) < self._max_send_batch_size:
                             try:
                                 payload, frame = queue_get_nowait()
                                 batch.append((payload, frame))
-                                if frame & CurlWsFlag.CLOSE:
+                                if frame & close_flag:
                                     break
 
                             except asyncio.QueueEmpty:
@@ -1647,7 +1647,7 @@ class AsyncWebSocket(BaseWebSocket):
                             queue_done()
 
                     # Exit cleanly after sending a CLOSE frame.
-                    if batch[-1][1] & CurlWsFlag.CLOSE:
+                    if batch[-1][1] & close_flag:
                         break
 
         except asyncio.CancelledError:
@@ -1680,8 +1680,8 @@ class AsyncWebSocket(BaseWebSocket):
         time_slice: float = self._send_time_slice
         next_yield: float = loop_time() + time_slice
         max_frame_size: int = self._MAX_CURL_FRAME_SIZE
-        e_again: CurlECode = CurlECode.AGAIN
-        cont_flag: CurlWsFlag = CurlWsFlag.CONT
+        e_again: int = int(CurlECode.AGAIN)
+        cont_flag: int = int(CurlWsFlag.CONT)
         max_zero_writes: int = 3
 
         # Message specific values

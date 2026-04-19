@@ -1038,13 +1038,13 @@ class AsyncSession(BaseSession[R]):
         interface: str | None = None,
         cert: str | tuple[str, str] | None = None,
         max_recv_speed: int = 0,
-        recv_queue_size: int = 32,
-        send_queue_size: int = 16,
-        max_send_batch_size: int = 32,
+        recv_queue_size: int = 128,
+        send_queue_size: int = 128,
+        max_send_batch_size: int = 64,
         coalesce_frames: bool = False,
         ws_retry: WebSocketRetryStrategy | None = None,
-        recv_time_slice: float = 0.005,
-        send_time_slice: float = 0.001,
+        recv_time_slice: float = 0.01,
+        send_time_slice: float = 0.01,
         max_message_size: int = 4 * 1024 * 1024,
         drain_on_error: bool = False,
         block_on_recv_queue_full: bool = True,
@@ -1162,6 +1162,7 @@ class AsyncSession(BaseSession[R]):
                 queue_class=asyncio.Queue,
                 event_class=asyncio.Event,
                 curl_options=curl_options,
+                perk=perk,
             )
             _ = curl.setopt(CurlOpt.TCP_NODELAY, 1)
             _ = curl.setopt(
