@@ -759,9 +759,9 @@ class TestAsyncWebSocketConcurrency:
                 _ = task.cancel()
 
             # All tasks should complete (no deadlock)
-            assert len(pending) == 0, (
-                f"Deadlock detected: {len(pending)} tasks still pending"
-            )
+            assert (
+                len(pending) == 0
+            ), f"Deadlock detected: {len(pending)} tasks still pending"
             assert len(done) == num_consumers
 
             # Collect results - some may be messages or errors if connection closed
@@ -903,9 +903,9 @@ class TestAsyncWebSocketConcurrency:
             # Should have at least 1 message (the echo) and the rest should be
             # close frames or closed errors
             assert messages >= 1, "Expected at least the echo message"
-            assert timeout_errors == 0, (
-                "No recv() should timeout - connection should close cleanly"
-            )
+            assert (
+                timeout_errors == 0
+            ), "No recv() should timeout - connection should close cleanly"
 
 
 class TestAsyncWebSocketCancellation:
@@ -2269,3 +2269,96 @@ class TestAsyncWebSocketRobustness:
             # (No leaked PONGs or malformed trailing fragments)
             with pytest.raises(asyncio.TimeoutError):
                 _ = await asyncio.wait_for(ws._receive_queue.get(), timeout=0.2)
+
+    @pytest.mark.asyncio
+    async def test_unaligned_simd_xor_masking(
+        self, ws_connection: AsyncWebSocket
+    ) -> None:
+        """
+        Tests the C-layer AVX2/Scalar fallback XOR masking.
+        By sending a massive, prime-number sized payload (which won't align perfectly
+        with the 32-byte AVX2 vectors or the 4-byte mask, AND forces fragmentation),
+        we prove the C-state correctly maintains the XOR offset across chunks.
+        """
+        # 5 MiB + 13 bytes (Prime-ish unaligned offset)
+        payload_size = (5 * 1024 * 1024) + 13
+        payload: bytes = b"X" * payload_size
+
+        # If the C-layer corrupts the mask, the server will either drop the connection
+        # due to invalid framing, or echo back corrupted garbage.
+        await ws_connection.send(payload)
+
+        # We must receive the exact payload back
+        data, flags = await ws_connection.recv(timeout=10.0)
+        assert flags & CurlWsFlag.BINARY
+        assert len(data) == payload_size
+        assert data == payload
+
+    @pytest.mark.asyncio
+    async def test_transport_exception_bubbles_to_all_waiters(
+        self,
+        session: AsyncSession[Response],
+        configurable_ws_server: ConfigurableWSServer,
+        ws_config: Callable[..., None],
+    ) -> None:
+        """
+        Proves that a background transport exception correctly wakes up
+        ALL concurrent recv() waiters and doesn't deadlock.
+        """
+        ws_config(behavior=ServerBehavior.SILENT)
+        ws: AsyncWebSocket = await session.ws_connect(
+            configurable_ws_server.url, recv_queue_size=10
+        )
+
+        # Create 5 concurrent waiters
+        tasks: list[Task[tuple[bytes, int]]] = [
+            asyncio.create_task(ws.recv(timeout=10.0)) for _ in range(5)
+        ]
+        await asyncio.sleep(0.1)  # Let them suspend
+
+        # Inject a fatal transport exception directly into the background loop
+        fatal_error: CurlError = CurlError(
+            "Fatal mock socket error", CurlECode.RECV_ERROR
+        )
+        ws._finalize_connection(fatal_error)  # pyright: ignore[reportPrivateUsage]
+
+        # Wait for all tasks to resolve
+        done, pending = await asyncio.wait(tasks, timeout=2.0)
+
+        assert len(pending) == 0, "Some recv tasks deadlocked!"
+
+        # Every single task should have raised the EXACT transport exception
+        for task in done:
+            with pytest.raises(CurlError) as exc_info:
+                _ = task.result()
+            assert exc_info.value.code == CurlECode.RECV_ERROR
+
+        await ws.close()
+
+    @pytest.mark.asyncio
+    async def test_graceful_close_timeout_forces_termination(
+        self,
+        session: AsyncSession[Response],
+        configurable_ws_server: ConfigurableWSServer,
+        ws_config: Callable[..., None],
+    ) -> None:
+        """
+        If the server goes totally silent and refuses to complete the close handshake,
+        ws.close() must time out and forcefully terminate the socket.
+        """
+        # Server will accept the connection but never reply to anything
+        ws_config(behavior=ServerBehavior.SILENT)
+        ws: AsyncWebSocket = await session.ws_connect(configurable_ws_server.url)
+
+        start_time: float = asyncio.get_running_loop().time()
+
+        # Close with a very aggressive 0.5s timeout
+        await ws.close(timeout=0.5)
+
+        duration: float = asyncio.get_running_loop().time() - start_time
+
+        # It should take approximately ~0.5 seconds, not hang forever
+        assert duration <= 0.5
+
+        # The connection MUST be marked as forcefully terminated
+        assert ws._terminated is True
