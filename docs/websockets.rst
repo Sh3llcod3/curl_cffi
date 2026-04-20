@@ -327,3 +327,19 @@ To prevent the background I/O tasks from starving the asyncio event loop during 
 
     # Force more frequent yields for lower latency in other async tasks
     ws = await session.ws_connect(url, recv_time_slice=0.001)
+
+Performance Tuning
+==================
+
+The ``curl_cffi`` WebSocket implementation uses a patched version of libcurl enhanced with AVX2/SIMD **hardware acceleration**. It is capable of multi-gigabit throughput.
+
+If your application needs to push a massive volume of data (e.g., file uploads, video streaming, or bulk syncing), **you should focus on sending fewer, larger messages rather than many tiny messages.**
+
+*   **The Overhead:** The WebSocket protocol requires every client-to-server message to be masked (XOR) for security. Additionally, every call to ``await ws.send()`` carries a small Python asyncio overhead.
+*   **The Solution:** Condense your data into larger blocks (e.g., 1MB to 10MB per message) before sending. This drastically reduces the framing, masking, and Python overhead, allowing libcurl to process the data at maximum speed.
+
+Automatic Reassembly
+--------------------
+You never need to worry about network fragmentation. If you send or receive a huge message, the underlying engine automatically chunks it into optimal network frames for transmission, and seamlessly reassembles those frames on the other side.
+
+Your application will always receive the data exactly as it was sent — as a single, complete string or bytes.

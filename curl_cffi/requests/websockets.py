@@ -934,8 +934,11 @@ class AsyncWebSocket(BaseWebSocket):
             WebSocketError: If a network-level transport error occurs.
 
         Notes:
-            ``WebSocketError`` exceptions may have originated from a prior
-            ``send()`` or ``recv()`` operation, since all operations
+            Message fragmentation and reassembly are handled automatically by the
+            implementation, so callers will always receive complete messages.
+
+            ``WebSocketError`` exceptions may have originated from prior
+            ``send()`` or ``recv()`` operations, since all operations
             share the same transport state once a failure occurs.
 
             This method does not wait for additional messages after a transport
@@ -1083,22 +1086,24 @@ class AsyncWebSocket(BaseWebSocket):
 
         Args:
             payload: Data to send (``str``/``bytes``/``bytearray``/``memoryview``).
-            flags: Frame type flags (e.g., ``CurlWsFlag.TEXT``).
+            flags: Frame type flags (e.g., ``CurlWsFlag.TEXT`` / ``CurlWsFlag.BINARY``).
             timeout: Max seconds to wait if the send queue is full.
 
         Raises:
-            CurlError: Exceptions caught by the I/O tasks.
+            CurlError: Network related exception occured.
             WebSocketClosed: The WebSocket has been closed.
             WebSocketTimeout: The send operation timed out.
 
         Note:
-            Large payloads are automatically split into fragments of ``64 KiB``,
-            but arrive as a single logical message by using the ``CURLWS_CONT`` flag.
+            There are no limits on the size of the message that can be sent.
+            Large outbound messages are seamlessly broken down into optimal
+            fragments using the ``CURLWS_CONT`` flag, arriving as a single
+            logical message to the server.
 
         Warning:
-            This method is non-blocking. It queues the message for background
+            This method is non-blocking. It queues the message for immediate
             transmission. Use ``await ws.flush()`` after sending if you need
-            to guarantee that data is handed off to the underlying Curl socket.
+            to guarantee that the data has actually reached the socket.
         """
 
         if self._transport_exception is not None:
@@ -1206,7 +1211,7 @@ class AsyncWebSocket(BaseWebSocket):
         else:
             payload_bytes = bytes(payload)
 
-        if len(payload_bytes) not in range(0, 126):
+        if len(payload_bytes) > 125:
             raise WebSocketError(
                 f"Ping frame has invalid length: {len(payload_bytes)}",
                 CurlECode.TOO_LARGE,
