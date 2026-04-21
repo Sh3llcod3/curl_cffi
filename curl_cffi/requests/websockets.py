@@ -695,7 +695,7 @@ class AsyncWebSocket(BaseWebSocket):
         "_block_on_recv_queue_full",
     )
 
-    _MAX_CURL_FRAME_SIZE: Final[int] = 65535
+    _MAX_CURL_FRAME_SIZE: Final[int] = 65536
 
     def __init__(
         self,
