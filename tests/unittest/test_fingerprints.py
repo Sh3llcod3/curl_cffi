@@ -1,5 +1,4 @@
 import json
-import ntpath
 import os
 
 import pytest
@@ -16,14 +15,16 @@ def clear_fingerprint_cache():
 
 
 def test_get_default_config_dir_linux_xdg(monkeypatch):
-    monkeypatch.setattr(os, "name", "posix")
+    if os.name != "posix":
+        pytest.skip("POSIX default config path test")
     monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg-config")
 
     assert _get_default_config_dir() == "/tmp/xdg-config/impersonate"
 
 
 def test_get_default_config_dir_linux_fallback(monkeypatch):
-    monkeypatch.setattr(os, "name", "posix")
+    if os.name != "posix":
+        pytest.skip("POSIX default config path test")
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", "/home/tester")
 
@@ -31,15 +32,16 @@ def test_get_default_config_dir_linux_fallback(monkeypatch):
 
 
 def test_get_default_config_dir_macos(monkeypatch):
-    monkeypatch.setattr(os, "name", "posix")
+    if os.name != "posix":
+        pytest.skip("POSIX default config path test")
     monkeypatch.setenv("HOME", "/Users/tester")
 
     assert _get_default_config_dir() == "/Users/tester/.config/impersonate"
 
 
 def test_get_default_config_dir_windows(monkeypatch):
-    monkeypatch.setattr(os, "name", "nt")
-    monkeypatch.setattr("curl_cffi.fingerprints.os.path", ntpath)
+    if os.name != "nt":
+        pytest.skip("Windows default config path test")
     monkeypatch.setenv("APPDATA", r"C:\Users\tester\AppData\Roaming")
 
     assert _get_default_config_dir() == r"C:\Users\tester\AppData\Roaming\impersonate"
