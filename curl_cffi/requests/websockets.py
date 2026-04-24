@@ -8,6 +8,7 @@ import asyncio
 import struct
 import threading
 import warnings
+from asyncio import InvalidStateError
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -122,10 +123,12 @@ def _safe_set_result(fut: asyncio.Future[None]) -> None:
     raised if the future was already finished/cancelled concurrently.
     This avoids spurious 'Exception in callback' traces in uvloop/asyncio.
 
-    Intentionally using try/except since this is frequently called.
+    Intentionally using try/except, cheaper than checking if the future is done.
     """
-    if not fut.done():
+    try:  # noqa: SIM105
         fut.set_result(None)
+    except InvalidStateError:
+        pass
 
 
 class BaseWebSocket:
