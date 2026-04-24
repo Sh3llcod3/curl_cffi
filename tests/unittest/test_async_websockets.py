@@ -592,27 +592,6 @@ class TestAsyncWebSocketTimeouts:
         response: str = await ws_connection.recv_str(timeout=5.0)
         assert response == "quick"
 
-    @pytest.mark.skip(
-        reason="Queue fills too fast to reliably test - implementation detail"
-    )
-    async def test_send_timeout_queue_full(
-        self,
-        session: AsyncSession[Response],
-        configurable_ws_server: ConfigurableWSServer,
-        ws_config: Callable[..., None],
-    ) -> None:
-        """Test send timeout when queue is full."""
-        ws_config(behavior=ServerBehavior.SILENT)
-        async with session.ws_connect(
-            configurable_ws_server.url,
-            send_queue_size=1,
-        ) as ws:
-            # Fill the queue
-            await ws.send(payload=b"first")
-            # This should timeout trying to enqueue
-            with pytest.raises(WebSocketTimeout):
-                await ws.send(b"second", timeout=0.1)
-
 
 class TestAsyncWebSocketLargeMessages:
     """Tests for large message handling and fragmentation."""
@@ -942,32 +921,6 @@ class TestAsyncWebSocketCancellation:
             # Connection should still be alive
             assert ws.is_alive()
 
-    @pytest.mark.skip(
-        reason="Queue fills too fast to reliably test - implementation detail"
-    )
-    async def test_cancel_send_during_queue_wait(
-        self,
-        session: AsyncSession[Response],
-        configurable_ws_server: ConfigurableWSServer,
-        ws_config: Callable[..., None],
-    ) -> None:
-        """Test cancelling send while waiting on full queue."""
-        ws_config(behavior=ServerBehavior.SILENT)
-        async with session.ws_connect(
-            configurable_ws_server.url,
-            send_queue_size=1,
-        ) as ws:
-            # Fill queue
-            await ws.send(b"first")
-
-            # Start send that will wait
-            task: Task[None] = asyncio.create_task(ws.send(b"second"))
-            await asyncio.sleep(0.05)
-            _ = task.cancel()
-
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
 
 class TestAsyncWebSocketClose:
     """Tests for connection close behavior."""
@@ -1131,30 +1084,6 @@ class TestAsyncWebSocketQueueBehavior:
                 except WebSocketTimeout:
                     break
 
-    @pytest.mark.skip(
-        reason="Queue drains too fast to reliably test - implementation detail"
-    )
-    async def test_send_queue_backpressure(
-        self,
-        session: AsyncSession[Response],
-        configurable_ws_server: ConfigurableWSServer,
-        ws_config: Callable[..., None],
-    ) -> None:
-        """Test send queue applies backpressure when full."""
-        ws_config(behavior=ServerBehavior.SILENT)
-
-        async with session.ws_connect(
-            configurable_ws_server.url,
-            send_queue_size=2,
-        ) as ws:
-            # Fill queue
-            await ws.send(b"1")
-            await ws.send(b"2")
-
-            # Next send should block briefly then timeout
-            with pytest.raises(WebSocketTimeout):
-                await ws.send(b"3", timeout=0.1)
-
     async def test_drain_on_error_false(
         self,
         session: AsyncSession[Response],
@@ -1218,28 +1147,6 @@ class TestAsyncWebSocketFlush:
 
         await ws_connection.flush(timeout=5.0)
         assert ws_connection.send_queue_size == 0
-
-    @pytest.mark.skip(reason="Flush completes too fast - libcurl buffers internally")
-    async def test_flush_timeout(
-        self,
-        session: AsyncSession[Response],
-        configurable_ws_server: ConfigurableWSServer,
-        ws_config: Callable[..., None],
-    ) -> None:
-        """Test flush timeout when messages can't be sent."""
-        ws_config(behavior=ServerBehavior.SILENT)
-
-        async with session.ws_connect(
-            configurable_ws_server.url,
-            send_queue_size=100,
-        ) as ws:
-            # Queue many messages
-            for _ in range(50):
-                await ws.send(b"x" * 10000)
-
-            # Flush with very short timeout
-            with pytest.raises(WebSocketTimeout):
-                await ws.flush(timeout=0.001)
 
 
 class TestAsyncWebSocketStateChecks:
@@ -1471,16 +1378,16 @@ class TestAsyncWebSocketParameterBoundaries:
                 data, _ = await ws.recv(timeout=5.0)
                 assert data == f"batch_{i}".encode()
 
-    @pytest.mark.parametrize("threshold", [4096, 65536, 524288])
-    async def test_various_yield_thresholds(
+    @pytest.mark.parametrize("time_slice", [0.001, 0.01, 0.05])
+    async def test_various_time_slices(
         self,
         session: AsyncSession[Response],
         configurable_ws_server: ConfigurableWSServer,
         ws_config: Callable[..., None],
-        threshold: int,
+        time_slice: float,
     ) -> None:
-        """Test recv_yield_threshold and send_yield_threshold parameters."""
-        ws_config(behavior=ServerBehavior.ECHO)
+        """Test recv_time_slice and send_time_slice parameters."""
+        ws_config(behavior=ServerBehavior.ECHO, max_size=20 * 1024 * 1024)
         heartbeat_ticks = 0
 
         async def heartbeat() -> None:
@@ -1494,18 +1401,19 @@ class TestAsyncWebSocketParameterBoundaries:
         try:
             async with session.ws_connect(
                 configurable_ws_server.url,
-                recv_yield_threshold=threshold,
-                send_yield_threshold=threshold,
+                recv_time_slice=time_slice,
+                send_time_slice=time_slice,
+                max_message_size=20 * 1024 * 1024,
             ) as ws:
-                # yielding for all parametrized thresholds.
-                payload_size = 900 * 1024
+                # 5MB payload ensures we trigger the time-based yield on all hardware
+                payload_size = 5 * 1024 * 1024
                 large_payload: bytes = b"A" * payload_size
 
                 await ws.send(large_payload)
                 data, _ = await ws.recv(timeout=10.0)
 
                 assert data == large_payload
-                # If yielding works, the heartbeat task must have been
+                # If time-slicing works, the heartbeat task must have been
                 # given time to run during the transfer.
                 assert heartbeat_ticks > 0
 
@@ -2428,11 +2336,9 @@ class TestAsyncWebSocketRobustness:
         try:
             async with session.ws_connect(
                 configurable_ws_server.url,
-                # Increase client limit to 25MB to accommodate the payload
                 max_message_size=25 * 1024 * 1024,
-                # Aggressive yielding (yield every 128KB) to maximize context switching
-                send_yield_threshold=128 * 1024,
-                recv_yield_threshold=128 * 1024,
+                send_time_slice=0.005,
+                recv_time_slice=0.005,
             ) as ws:
                 # Time the send/recv process
                 start_time: float = asyncio.get_running_loop().time()
@@ -2446,7 +2352,7 @@ class TestAsyncWebSocketRobustness:
                 assert len(data) == huge_size
                 assert data == payload
 
-                # Assert fairness: With a 20MB payload and 128KB threshold,
+                # Assert fairness: With a 20MB payload and 5ms time slice,
                 # we yielded at least 160 times. Heartbeat MUST have ticked.
                 assert heartbeat_ticks > 0
                 assert heartbeat_ticks >= 5

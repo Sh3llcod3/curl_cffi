@@ -8,12 +8,10 @@ import asyncio
 import struct
 import threading
 import warnings
-from asyncio import InvalidStateError as _InvalidStateError
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import IntEnum
-from functools import partial
 from json import dumps as json_dumps
 from json import loads as json_loads
 from random import uniform
@@ -47,10 +45,6 @@ if TYPE_CHECKING:
     ON_CLOSE_T = Callable[["WebSocket", int, str], None]
     RECV_QUEUE_ITEM = tuple[bytes, int]
     SEND_QUEUE_ITEM = tuple[bytes | bytearray | memoryview, CurlWsFlag | int]
-
-
-# We need a partial for dumps() because a custom function may not accept the parameter
-dumps_partial: partial[str] = partial(json_dumps, separators=(",", ":"))
 
 
 @dataclass
@@ -130,10 +124,8 @@ def _safe_set_result(fut: asyncio.Future[None]) -> None:
 
     Intentionally using try/except since this is frequently called.
     """
-    try:  # noqa: SIM105
+    if not fut.done():
         fut.set_result(None)
-    except _InvalidStateError:
-        pass
 
 
 class BaseWebSocket:
@@ -561,7 +553,7 @@ class WebSocket(BaseWebSocket):
         return self.send(payload, CurlWsFlag.TEXT)
 
     def send_json(
-        self, payload: object, *, dumps: Callable[..., str] = dumps_partial
+        self, payload: object, *, dumps: Callable[..., str] = json_dumps
     ) -> int:
         """Send a JSON frame.
 
@@ -569,6 +561,8 @@ class WebSocket(BaseWebSocket):
             payload: data to send.
             dumps: JSON encoder, default is json.dumps.
         """
+        if dumps is json_dumps:
+            return self.send_str(json_dumps(payload, separators=(",", ":")))
         return self.send_str(dumps(payload))
 
     def ping(self, payload: str | bytes) -> int:
@@ -748,7 +742,7 @@ class AsyncWebSocket(BaseWebSocket):
                 If False, the connection fails immediately to prevent data loss.
 
         Note:
-            Architecture: This uses a decoupled I/O model. Network operations run in
+            Architecture: This uses a background I/O model. Network operations run in
             background tasks. Errors are raised in subsequent calls to send() or recv().
 
             Performance: The time_slice defaults (5ms read / 1ms write) favor reading
@@ -1182,7 +1176,7 @@ class AsyncWebSocket(BaseWebSocket):
         return await self.send(payload, CurlWsFlag.TEXT)
 
     async def send_json(
-        self, payload: object, *, dumps: Callable[..., str] = dumps_partial
+        self, payload: object, *, dumps: Callable[..., str] = json_dumps
     ) -> None:
         """Send a JSON frame.
 
@@ -1192,6 +1186,8 @@ class AsyncWebSocket(BaseWebSocket):
 
         For more info, see the docstring for :meth:`send()`
         """
+        if dumps is json_dumps:
+            return await self.send_str(json_dumps(payload, separators=(",", ":")))
         return await self.send_str(dumps(payload))
 
     async def ping(self, payload: str | bytes) -> None:
