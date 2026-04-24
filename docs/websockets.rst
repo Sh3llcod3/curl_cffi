@@ -340,6 +340,7 @@ If your application needs to push a massive volume of data (e.g., file uploads, 
 
 Automatic Reassembly
 --------------------
+
 You never need to worry about network fragmentation. If you send or receive a huge message, the underlying engine automatically chunks it into optimal network frames for transmission, and seamlessly reassembles those frames on the other side.
 
 Your application will always receive the data exactly as it was sent — as a single, complete string or bytes.
