@@ -320,8 +320,8 @@ Cooperative Multitasking
 
 To prevent the background I/O tasks from starving the asyncio event loop during heavy load, you can tune the time slicing.
 
-*   **recv_time_slice** (default: 0.01s): Max time spent processing incoming messages before yielding.
-*   **send_time_slice** (default: 0.01s): Max time spent sending messages before yielding.
+*   **recv_time_slice** (default: 0.01s): Max time spent processing incoming messages before yielding (10ms).
+*   **send_time_slice** (default: 0.005s): Max time spent sending messages before yielding (5ms).
 
 .. code-block:: python
 

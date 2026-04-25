@@ -708,7 +708,7 @@ class AsyncWebSocket(BaseWebSocket):
         coalesce_frames: bool = False,
         ws_retry: WebSocketRetryStrategy | None = None,
         recv_time_slice: float = 0.01,
-        send_time_slice: float = 0.01,
+        send_time_slice: float = 0.005,
         max_message_size: int = 4 * 1024 * 1024,
         drain_on_error: bool = False,
         block_on_recv_queue_full: bool = True,

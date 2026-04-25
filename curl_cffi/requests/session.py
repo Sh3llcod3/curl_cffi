@@ -1048,7 +1048,7 @@ class AsyncSession(BaseSession[R]):
         coalesce_frames: bool = False,
         ws_retry: WebSocketRetryStrategy | None = None,
         recv_time_slice: float = 0.01,
-        send_time_slice: float = 0.01,
+        send_time_slice: float = 0.005,
         max_message_size: int = 4 * 1024 * 1024,
         drain_on_error: bool = False,
         block_on_recv_queue_full: bool = True,
@@ -1109,10 +1109,10 @@ class AsyncSession(BaseSession[R]):
             ws_retry (WebSocketRetryStrategy): Retry policy for WebSocket messages.
             recv_time_slice: The maximum duration (in seconds) to process incoming
                 messages before yielding to the event loop.
-                Defaults to ``0.005`` (5ms).
+                Defaults to ``0.01`` (10ms).
             send_time_slice: The maximum duration (in seconds) to process outgoing
                 messages before yielding to the event loop.
-                Defaults to ``0.001`` (1ms).
+                Defaults to ``0.005`` (5ms).
             max_message_size: Maximum allowed size for a complete received
                 WebSocket message (default: ``4 MiB``).
             drain_on_error: If ``True``, when a connection error occurs,
